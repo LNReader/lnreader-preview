@@ -36,11 +36,7 @@ jobs:
           exclude_types: "draft|prerelease"
           view_top: 1
 
-      - uses: actions/checkout@v2
       - name: Install Dependencies
-        with:
-          repository: "lnreader/lnreader"
-          fetch-depth: 0
         run: |
           npm install
 
