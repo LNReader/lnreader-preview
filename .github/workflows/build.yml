@@ -1,0 +1,117 @@
+name: Build job
+
+on:
+  workflow_dispatch:
+    inputs:
+      git-ref:
+        description: Git Ref (Optional)
+        required: false
+      dry-run:
+        description: Creates a draft release
+        required: false
+
+jobs:
+  build-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repository (Latest)
+        uses: actions/checkout@v2
+        with:
+          repository: "lnreader/lnreader"
+          fetch-depth: 0
+        if: github.event.inputs.git-ref == ''
+      - name: Clone Repository (Custom Ref)
+        uses: actions/checkout@v2
+        if: github.event.inputs.git-ref != ''
+        with:
+          repository: "lnreader/lnreader"
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.git-ref }}
+
+      - name: Get previous release
+        id: last_release
+        uses: InsonusK/get-latest-release@v1.0.1
+        with:
+          myToken: ${{ github.token }}
+          exclude_types: "draft|prerelease"
+          view_top: 1
+
+      - uses: actions/checkout@v2
+      - name: Install Dependencies
+        run: |
+          npm install
+      - name: Cache Gradle Wrapper
+        uses: actions/cache@v2
+        with:
+          path: ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle Dependencies
+        uses: actions/cache@v2
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-caches-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-caches-
+
+      - name: Make Gradlew Executable
+        run: cd android && chmod +x ./gradlew
+
+      - name: Prepare build
+        run: |
+          set -e
+
+          commit_count=$(git rev-list --count HEAD)
+          echo "COMMIT_COUNT=$commit_count" >> $GITHUB_ENV
+          current_sha=$(git rev-parse --short HEAD)
+          echo "CURRENT_SHA=$current_sha" >> $GITHUB_ENV
+
+          prev_commit_count=$(echo "${{ steps.last_release.outputs.tag_name }}" | sed -e "s/^r//")
+          commit_count_diff=$(expr $commit_count - $prev_commit_count)
+          prev_release_sha=$(git rev-parse --short HEAD~$commit_count_diff)
+          echo "PREV_RELEASE_SHA=$prev_release_sha" >> $GITHUB_ENV
+
+          echo "COMMIT_LOGS<<{delimiter}
+          $(curl -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/lnreader/lnreader/compare/$prev_release_sha...$current_sha" \
+            | jq '[.commits[]|{message:(.commit.message | split("\n")), username:.author.login}]' \
+            | jq -r '.[]|"- \(.message | first) (@\(.username))"')
+          {delimiter}" >> $GITHUB_ENV
+
+      - name: Build Android Release
+        run: |
+          cd android && ./gradlew assembleRelease --no-daemon
+
+      - name: Clean up build artifacts
+        run: |
+          set -e
+
+          cp android/app/build/outputs/apk/release/app-release.apk LNReader-r${{ env.COMMIT_COUNT }}.apk
+          sha=`sha256sum LNReader-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
+          echo "APK_UNIVERSAL_SHA=$sha" >> $GITHUB_ENV
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: r${{ env.COMMIT_COUNT }}
+          name: LNReader Preview r${{ env.COMMIT_COUNT }}
+          body: |
+            ### Commits
+
+            https://github.com/lnreader/lnreader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
+
+            ${{ env.COMMIT_LOGS }}
+          files: |
+            LNReader-r${{ env.COMMIT_COUNT }}.apk
+          draft: ${{ github.event.inputs.dry-run != '' }}
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune old releases
+        uses: dev-drprasad/delete-older-releases@v0.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          keep_latest: 28
+          delete_tags: true
