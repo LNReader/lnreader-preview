@@ -71,13 +71,6 @@ jobs:
           prev_release_sha=$(git rev-parse --short HEAD~$commit_count_diff)
           echo "PREV_RELEASE_SHA=$prev_release_sha" >> $GITHUB_ENV
 
-          echo "COMMIT_LOGS<<{delimiter}
-          $(curl -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/lnreader/lnreader/compare/$prev_release_sha...$current_sha" \
-            | jq '[.commits[]|{message:(.commit.message | split("\n")), username:.author.login}]' \
-            | jq -r '.[]|"- \(.message | first) (@\(.username))"')
-          {delimiter}" >> $GITHUB_ENV
-
       - name: Build Android Release
         run: |
           cd android && ./gradlew assembleRelease --no-daemon
@@ -100,7 +93,6 @@ jobs:
 
             https://github.com/lnreader/lnreader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
 
-            ${{ env.COMMIT_LOGS }}
           files: |
             LNReader-r${{ env.COMMIT_COUNT }}.apk
           draft: ${{ github.event.inputs.dry-run != '' }}
